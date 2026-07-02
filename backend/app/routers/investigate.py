@@ -1,6 +1,7 @@
 """Investigation endpoint router."""
 
 import asyncio
+import logging
 from typing import List
 
 from fastapi import APIRouter, HTTPException
@@ -20,6 +21,7 @@ from app.services.input_validator import validate_investigation_input
 from app.services.log_fetcher import fetch_logs, fetch_metrics
 from app.services.report_generator import generate_report
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -89,6 +91,9 @@ async def investigate(input_data: InvestigationInput):
             status_code=502,
             detail=analysis_result.model_dump(),
         )
+
+    # Log the raw LLM response for debugging
+    logger.info(f"Analysis result keys: {list(analysis_result.keys()) if isinstance(analysis_result, dict) else 'not a dict'}")
 
     # Step 4: Generate report
     report = generate_report(analysis_result, time_window)

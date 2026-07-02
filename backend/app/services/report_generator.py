@@ -65,38 +65,70 @@ def generate_report(
         key=lambda e: (e.timestamp, TYPE_PRIORITY.get(e.type, 99))
     )
 
-    # Parse suspicious commits
-    suspicious_raw = analysis_result.get("suspiciousCommits", [])
+    # Parse suspicious commits (handle various key names)
+    suspicious_raw = (
+        analysis_result.get("suspiciousCommits")
+        or analysis_result.get("suspicious_commits")
+        or analysis_result.get("suspicious")
+        or []
+    )
     suspicious_commits: List[SuspiciousCommit] = []
     for commit in suspicious_raw:
-        confidence = commit.get("confidence", "Low")
+        confidence = commit.get("confidence", commit.get("severity", "Low"))
         if confidence not in ("High", "Medium", "Low"):
             confidence = "Low"
-        suspicious_commits.append(
-            SuspiciousCommit(
-                sha=commit.get("sha", ""),
-                confidence=confidence,
-                explanation=commit.get("explanation", ""),
+        sha = commit.get("sha", commit.get("commit_sha", ""))
+        explanation = commit.get("explanation", commit.get("reason", commit.get("description", "")))
+        if sha:
+            suspicious_commits.append(
+                SuspiciousCommit(
+                    sha=sha,
+                    confidence=confidence,
+                    explanation=explanation,
+                )
             )
-        )
 
     # Parse root cause (truncate to 500 chars)
-    root_cause = analysis_result.get("rootCause", "No root cause identified.")
+    root_cause = (
+        analysis_result.get("rootCause")
+        or analysis_result.get("root_cause")
+        or analysis_result.get("rootcause")
+        or "No root cause identified."
+    )
     if len(root_cause) > MAX_ROOT_CAUSE_LENGTH:
         root_cause = root_cause[:MAX_ROOT_CAUSE_LENGTH]
 
-    # Parse rollback suggestions
-    rollbacks_raw = analysis_result.get("suggestedRollbacks", [])
+    # Parse rollback suggestions (handle various key names the LLM might use)
+    rollbacks_raw = (
+        analysis_result.get("suggestedRollbacks")
+        or analysis_result.get("suggested_rollbacks")
+        or analysis_result.get("suggestedRollback")
+        or analysis_result.get("rollbacks")
+        or analysis_result.get("rollback_suggestions")
+        or []
+    )
     suggested_rollback: List[RollbackSuggestion] = []
     for rb in rollbacks_raw:
-        sha = rb.get("sha", "")
+        sha = rb.get("sha", rb.get("commit_sha", ""))
         command = rb.get("command", f"git revert {sha}")
         # Ensure command format is correct
         if not command.startswith("git revert"):
             command = f"git revert {sha}"
-        suggested_rollback.append(
-            RollbackSuggestion(sha=sha, command=command)
-        )
+        if sha:  # Only add if we have a SHA
+            suggested_rollback.append(
+                RollbackSuggestion(sha=sha, command=command)
+            )
+
+    # If no rollbacks but we have suspicious commits, generate rollback suggestions from them
+    if not suggested_rollback and suspicious_commits:
+        for commit in suspicious_commits:
+            if commit.sha:
+                suggested_rollback.append(
+                    RollbackSuggestion(
+                        sha=commit.sha,
+                        command=f"git revert {commit.sha}",
+                    )
+                )
 
     return IncidentReport(
         timeWindow=time_window,

@@ -15,9 +15,9 @@ from app.models import (
     TimeWindow,
 )
 
-# Token budget
-MAX_PROMPT_CHARS = 30000
-PROMPT_OVERHEAD_CHARS = 2000
+# Token budget - sized to accommodate code diffs
+MAX_PROMPT_CHARS = 60000
+PROMPT_OVERHEAD_CHARS = 3000
 
 
 def _estimate_chars(obj: Any) -> int:
@@ -39,14 +39,18 @@ def _truncate_data(
     """
     commits_data = []
     for c in commits:
-        commits_data.append({
+        commit_info = {
             "sha": c.sha[:8],
             "author": c.author,
             "time": c.timestamp,
             "msg": c.message.split("\n")[0][:120],
             "files": len(c.changed_files),
             "key_files": c.changed_files[:5],
-        })
+        }
+        # Include patch/diff content for code-level analysis
+        if c.patch:
+            commit_info["diff"] = c.patch[:3000]
+        commits_data.append(commit_info)
 
     logs_data = []
     for l in log_events:
@@ -96,10 +100,15 @@ def _construct_prompt(
     time_window: TimeWindow,
 ) -> str:
     """Construct a compact analysis prompt."""
-    commits_str = "\n".join(
-        f"- {c['sha']} | {c['time']} | {c['author']} | {c['msg']} | {c['files']} files ({', '.join(c.get('key_files', [])[:3])})"
-        for c in commits_data
-    )
+    # Build commit strings with diff content included
+    commit_parts = []
+    for c in commits_data:
+        header = f"- {c['sha']} | {c['time']} | {c['author']} | {c['msg']} | {c['files']} files ({', '.join(c.get('key_files', [])[:3])})"
+        if c.get("diff"):
+            header += f"\n  DIFF:\n  {c['diff'][:2000]}"
+        commit_parts.append(header)
+
+    commits_str = "\n".join(commit_parts)
 
     logs_str = "\n".join(
         f"- {l['time']} [{l['group']}] {l['msg']}"
@@ -113,7 +122,7 @@ def _construct_prompt(
 
     prompt = f"""Analyze this production incident. Time window: {time_window.start.isoformat()} to {time_window.end.isoformat()}
 
-COMMITS:
+COMMITS (with code diffs):
 {commits_str or "(none)"}
 
 LOGS:
@@ -122,8 +131,10 @@ LOGS:
 METRICS:
 {metrics_str or "(none)"}
 
+Analyze the code changes in the diffs above. Identify which specific code changes are most likely to have caused the incident. Explain what the code does and why it's problematic.
+
 Respond with JSON only (no markdown, no code fences):
-{{"timeline":[{{"timestamp":"...","type":"commit|log_event|metric_data_point","summary":"...","details":{{}}}}],"suspiciousCommits":[{{"sha":"full-40-char-sha","confidence":"High|Medium|Low","explanation":"..."}}],"rootCause":"max 500 chars","suggestedRollbacks":[{{"sha":"full-sha","command":"git revert <sha>"}}]}}"""
+{{"timeline":[{{"timestamp":"...","type":"commit|log_event|metric_data_point","summary":"...","details":{{}}}}],"suspiciousCommits":[{{"sha":"full-40-char-sha","confidence":"High|Medium|Low","explanation":"detailed explanation referencing specific code changes from the diff"}}],"rootCause":"max 500 chars describing the specific code issue","suggestedRollbacks":[{{"sha":"full-sha","command":"git revert <sha>"}}]}}"""
 
     return prompt
 

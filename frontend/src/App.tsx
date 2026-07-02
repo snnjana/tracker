@@ -6,7 +6,7 @@ function App() {
       <header className="app-header">
         <h1>AI Incident Timeline Correlator</h1>
         <p className="subtitle">
-          Correlate GitHub commits with AWS CloudWatch data to identify incident root causes
+          Investigate GitHub commits to identify incident root causes
         </p>
       </header>
       <main>

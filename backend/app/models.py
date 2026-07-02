@@ -42,6 +42,7 @@ class CommitData(BaseModel):
     timestamp: str = Field(..., description="ISO 8601 timestamp")
     message: str = Field(..., description="Commit message up to 72,000 chars")
     changed_files: List[str] = Field(default_factory=list, alias="changedFiles")
+    patch: Optional[str] = Field(None, description="Combined diff/patch content for the commit")
 
     class Config:
         populate_by_name = True

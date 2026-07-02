@@ -10,6 +10,8 @@ from app.models import CommitData, ErrorResponse, TimeWindow
 MAX_COMMITS = 250
 MAX_CHANGED_FILES = 3000
 MAX_MESSAGE_LENGTH = 72000
+MAX_PATCH_LENGTH = 2000  # Per file, truncate large diffs
+MAX_TOTAL_PATCH_LENGTH = 8000  # Total patch per commit
 
 
 async def fetch_commits(
@@ -50,14 +52,25 @@ async def fetch_commits(
             if count >= MAX_COMMITS:
                 break
 
-            # Get changed files (limited to MAX_CHANGED_FILES)
+            # Get changed files and patch content
             changed_files = []
+            patches = []
             try:
                 files = commit.files or []
+                total_patch_len = 0
                 for f in files[:MAX_CHANGED_FILES]:
                     changed_files.append(f.filename)
+                    # Collect patch/diff for each file (truncated)
+                    if f.patch and total_patch_len < MAX_TOTAL_PATCH_LENGTH:
+                        file_patch = f.patch
+                        if len(file_patch) > MAX_PATCH_LENGTH:
+                            file_patch = file_patch[:MAX_PATCH_LENGTH] + "\n... (truncated)"
+                        patches.append(f"--- {f.filename} ---\n{file_patch}")
+                        total_patch_len += len(file_patch)
             except Exception:
                 pass
+
+            combined_patch = "\n".join(patches) if patches else None
 
             # Truncate message if needed
             message = commit.commit.message or ""
@@ -75,6 +88,7 @@ async def fetch_commits(
                 ),
                 message=message,
                 changedFiles=changed_files,
+                patch=combined_patch,
             )
             commit_list.append(commit_data)
             count += 1
