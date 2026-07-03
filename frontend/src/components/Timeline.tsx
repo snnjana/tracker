@@ -4,19 +4,6 @@ interface TimelineProps {
   entries: TimelineEntry[];
 }
 
-function getTypeIcon(type: TimelineEntry['type']): string {
-  switch (type) {
-    case 'commit':
-      return '🔀';
-    case 'log_event':
-      return '📋';
-    case 'metric_data_point':
-      return '📈';
-    default:
-      return '•';
-  }
-}
-
 function getTypeLabel(type: TimelineEntry['type']): string {
   switch (type) {
     case 'commit':
@@ -32,7 +19,12 @@ function getTypeLabel(type: TimelineEntry['type']): string {
 
 function formatTimestamp(timestamp: string): string {
   try {
-    return new Date(timestamp).toLocaleString();
+    return new Date(timestamp).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   } catch {
     return timestamp;
   }
@@ -47,9 +39,6 @@ function Timeline({ entries }: TimelineProps) {
     <div className="timeline">
       {entries.map((entry, index) => (
         <div key={index} className={`timeline-entry timeline-entry--${entry.type}`}>
-          <div className="timeline-entry__icon" aria-label={getTypeLabel(entry.type)}>
-            {getTypeIcon(entry.type)}
-          </div>
           <div className="timeline-entry__content">
             <div className="timeline-entry__header">
               <span className="timeline-entry__type">{getTypeLabel(entry.type)}</span>

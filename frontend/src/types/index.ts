@@ -63,12 +63,24 @@ export interface TimelineEntry {
   details: Record<string, unknown>;
 }
 
+export interface IssueData {
+  number: number;
+  title: string;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+  labels: string[];
+  body?: string;
+  url: string;
+}
+
 export interface IncidentReport {
   timeWindow: TimeWindow;
   timeline: TimelineEntry[];
   suspiciousCommits: SuspiciousCommit[];
   rootCause: string;
   suggestedRollback: RollbackSuggestion[];
+  issues?: IssueData[];
 }
 
 export interface ErrorResponse {

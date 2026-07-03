@@ -10,6 +10,7 @@ from app.config import settings
 from app.models import (
     CommitData,
     ErrorResponse,
+    IssueData,
     LogEvent,
     MetricDataPoint,
     TimeWindow,
@@ -29,13 +30,15 @@ def _truncate_data(
     commits: List[CommitData],
     log_events: List[LogEvent],
     metric_data_points: List[MetricDataPoint],
-) -> tuple[List[Dict], List[Dict], List[Dict]]:
+    issues: List[IssueData],
+) -> tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
     """Truncate data to fit within token budget.
 
     Strategy:
     1. Always preserve all commits (summarized).
-    2. Remove oldest log events first.
-    3. If still over budget, remove oldest metric data points.
+    2. Always preserve issues (compact).
+    3. Remove oldest log events first.
+    4. If still over budget, remove oldest metric data points.
     """
     commits_data = []
     for c in commits:
@@ -51,6 +54,20 @@ def _truncate_data(
         if c.patch:
             commit_info["diff"] = c.patch[:3000]
         commits_data.append(commit_info)
+
+    issues_data = []
+    for i in issues:
+        issue_info = {
+            "number": i.number,
+            "title": i.title,
+            "state": i.state,
+            "created_at": i.created_at,
+            "updated_at": i.updated_at,
+            "labels": i.labels,
+        }
+        if i.body:
+            issue_info["body"] = i.body[:300]
+        issues_data.append(issue_info)
 
     logs_data = []
     for l in log_events:
@@ -71,32 +88,34 @@ def _truncate_data(
 
     available_chars = MAX_PROMPT_CHARS - PROMPT_OVERHEAD_CHARS
     commits_chars = _estimate_chars(commits_data)
-    remaining = available_chars - commits_chars
+    issues_chars = _estimate_chars(issues_data)
+    remaining = available_chars - commits_chars - issues_chars
 
     metrics_chars = _estimate_chars(metrics_data)
     logs_chars = _estimate_chars(logs_data)
 
-    if commits_chars + logs_chars + metrics_chars <= available_chars:
-        return commits_data, logs_data, metrics_data
+    if commits_chars + issues_chars + logs_chars + metrics_chars <= available_chars:
+        return commits_data, logs_data, metrics_data, issues_data
 
     if metrics_chars <= remaining:
         remaining_for_logs = remaining - metrics_chars
         while logs_data and _estimate_chars(logs_data) > remaining_for_logs:
             logs_data.pop(0)
-        return commits_data, logs_data, metrics_data
+        return commits_data, logs_data, metrics_data, issues_data
 
     logs_data = []
     remaining_for_metrics = remaining
     while metrics_data and _estimate_chars(metrics_data) > remaining_for_metrics:
         metrics_data.pop(0)
 
-    return commits_data, logs_data, metrics_data
+    return commits_data, logs_data, metrics_data, issues_data
 
 
 def _construct_prompt(
     commits_data: List[Dict],
     logs_data: List[Dict],
     metrics_data: List[Dict],
+    issues_data: List[Dict],
     time_window: TimeWindow,
 ) -> str:
     """Construct a compact analysis prompt."""
@@ -120,10 +139,22 @@ def _construct_prompt(
         for m in metrics_data[:30]
     )
 
+    issues_parts = []
+    for i in issues_data:
+        labels_str = ", ".join(i.get("labels", []))
+        line = f"- #{i['number']} [{i['state']}] \"{i['title']}\" (labels: {labels_str}) - created {i['created_at']}"
+        if i.get("body"):
+            line += f"\n  Body: {i['body']}"
+        issues_parts.append(line)
+    issues_str = "\n".join(issues_parts)
+
     prompt = f"""Analyze this production incident. Time window: {time_window.start.isoformat()} to {time_window.end.isoformat()}
 
 COMMITS (with code diffs):
 {commits_str or "(none)"}
+
+ISSUES:
+{issues_str or "(none)"}
 
 LOGS:
 {logs_str or "(none)"}
@@ -131,7 +162,7 @@ LOGS:
 METRICS:
 {metrics_str or "(none)"}
 
-Analyze the code changes in the diffs above. Identify which specific code changes are most likely to have caused the incident. Explain what the code does and why it's problematic.
+Analyze the code changes in the diffs above. Identify which specific code changes are most likely to have caused the incident. Correlate GitHub issues with commits to understand the context. Explain what the code does and why it's problematic.
 
 Respond with JSON only (no markdown, no code fences):
 {{"timeline":[{{"timestamp":"...","type":"commit|log_event|metric_data_point","summary":"...","details":{{}}}}],"suspiciousCommits":[{{"sha":"full-40-char-sha","confidence":"High|Medium|Low","explanation":"detailed explanation referencing specific code changes from the diff"}}],"rootCause":"max 500 chars describing the specific code issue","suggestedRollbacks":[{{"sha":"full-sha","command":"git revert <sha>"}}]}}"""
@@ -141,6 +172,7 @@ Respond with JSON only (no markdown, no code fences):
 
 async def analyze_incident(
     commits: List[CommitData],
+    issues: List[IssueData],
     log_events: List[LogEvent],
     metric_data_points: List[MetricDataPoint],
     time_window: TimeWindow,
@@ -153,12 +185,12 @@ async def analyze_incident(
         Parsed analysis result dict on success, or ErrorResponse on failure.
     """
     # Truncate data to fit token budget
-    commits_data, logs_data, metrics_data = _truncate_data(
-        commits, log_events, metric_data_points
+    commits_data, logs_data, metrics_data, issues_data = _truncate_data(
+        commits, log_events, metric_data_points, issues
     )
 
     # Construct prompt
-    prompt = _construct_prompt(commits_data, logs_data, metrics_data, time_window)
+    prompt = _construct_prompt(commits_data, logs_data, metrics_data, issues_data, time_window)
 
     try:
         client = Groq(api_key=settings.GROQ_API_KEY)
@@ -229,9 +261,18 @@ async def analyze_incident(
             details=str(e)[:300],
         )
     except APIError as e:
+        error_msg = str(e)
+
+        if "context" in error_msg.lower() or "token" in error_msg.lower():
+            return ErrorResponse(
+                code="CONTEXT_TOO_LARGE",
+                message="The selected investigation duration is too large, or has too many tokens to be processed.",
+                details="Try shortening the time window and try again.",
+            )
+
         return ErrorResponse(
             code="API_ERROR",
-            message=f"Groq API error: {str(e)[:200]}",
+            message=f"Groq API error: {error_msg[:200]}",
             details=str(e.status_code) if hasattr(e, "status_code") else None,
         )
     except Exception as e:

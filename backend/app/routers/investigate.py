@@ -11,6 +11,7 @@ from app.models import (
     ErrorResponse,
     IncidentReport,
     InvestigationInput,
+    IssueData,
     LogEvent,
     MetricDataPoint,
     TimeWindow,
@@ -18,6 +19,7 @@ from app.models import (
 from app.services.analysis_engine import analyze_incident
 from app.services.commit_fetcher import fetch_commits
 from app.services.input_validator import validate_investigation_input
+from app.services.issue_fetcher import fetch_issues
 from app.services.log_fetcher import fetch_logs, fetch_metrics
 from app.services.report_generator import generate_report
 
@@ -48,11 +50,12 @@ async def investigate(input_data: InvestigationInput):
     metric_queries = input_data.metric_queries or []
 
     commits_task = fetch_commits(owner, repo, time_window)
+    issues_task = fetch_issues(owner, repo, time_window)
     logs_task = fetch_logs(log_group_names, time_window)
     metrics_task = fetch_metrics(metric_queries, time_window)
 
-    commits_result, logs_result, metrics_result = await asyncio.gather(
-        commits_task, logs_task, metrics_task
+    commits_result, issues_result, logs_result, metrics_result = await asyncio.gather(
+        commits_task, issues_task, logs_task, metrics_task
     )
 
     # Check for errors in fetch results
@@ -60,6 +63,12 @@ async def investigate(input_data: InvestigationInput):
         raise HTTPException(
             status_code=502,
             detail=commits_result.model_dump(),
+        )
+
+    if isinstance(issues_result, ErrorResponse):
+        raise HTTPException(
+            status_code=502,
+            detail=issues_result.model_dump(),
         )
 
     if isinstance(logs_result, ErrorResponse):
@@ -75,12 +84,14 @@ async def investigate(input_data: InvestigationInput):
         )
 
     commits: List[CommitData] = commits_result
+    issues: List[IssueData] = issues_result
     log_events: List[LogEvent] = logs_result
     metric_data_points: List[MetricDataPoint] = metrics_result
 
     # Step 3: Analyze with Groq
     analysis_result = await analyze_incident(
         commits=commits,
+        issues=issues,
         log_events=log_events,
         metric_data_points=metric_data_points,
         time_window=time_window,
@@ -96,6 +107,6 @@ async def investigate(input_data: InvestigationInput):
     logger.info(f"Analysis result keys: {list(analysis_result.keys()) if isinstance(analysis_result, dict) else 'not a dict'}")
 
     # Step 4: Generate report
-    report = generate_report(analysis_result, time_window)
+    report = generate_report(analysis_result, time_window, issues)
 
     return report

@@ -90,12 +90,27 @@ class TimelineEntry(BaseModel):
         populate_by_name = True
 
 
+class IssueData(BaseModel):
+    number: int
+    title: str
+    state: str = Field(..., description="open or closed")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
+    labels: List[str] = Field(default_factory=list)
+    body: Optional[str] = Field(None, description="Issue body truncated to 500 chars")
+    url: str
+
+    class Config:
+        populate_by_name = True
+
+
 class IncidentReport(BaseModel):
     time_window: TimeWindow = Field(..., alias="timeWindow")
     timeline: List[TimelineEntry]
     suspicious_commits: List[SuspiciousCommit] = Field(..., alias="suspiciousCommits")
     root_cause: str = Field(..., alias="rootCause", max_length=500)
     suggested_rollback: List[RollbackSuggestion] = Field(..., alias="suggestedRollback")
+    issues: Optional[List[IssueData]] = Field(None, description="GitHub issues within the time window")
 
     class Config:
         populate_by_name = True

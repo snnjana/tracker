@@ -1,9 +1,10 @@
 """Transforms Bedrock analysis response into a structured IncidentReport."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.models import (
     IncidentReport,
+    IssueData,
     RollbackSuggestion,
     SuspiciousCommit,
     TimelineEntry,
@@ -21,7 +22,7 @@ TYPE_PRIORITY = {
 
 
 def generate_report(
-    analysis_result: Dict[str, Any], time_window: TimeWindow
+    analysis_result: Dict[str, Any], time_window: TimeWindow, issues: Optional[List[IssueData]] = None
 ) -> IncidentReport:
     """Transform Bedrock analysis output into a structured IncidentReport.
 
@@ -136,4 +137,5 @@ def generate_report(
         suspiciousCommits=suspicious_commits,
         rootCause=root_cause,
         suggestedRollback=suggested_rollback,
+        issues=issues or [],
     )
