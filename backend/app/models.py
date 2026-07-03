@@ -23,6 +23,7 @@ class MetricQuery(BaseModel):
 class InvestigationInput(BaseModel):
     repo_url: str = Field(..., alias="repoUrl", description="GitHub repository URL")
     time_range: Optional[TimeRange] = Field(None, alias="timeRange")
+    github_token: Optional[str] = Field(None, alias="githubToken", description="User-provided GitHub token for private repos")
     log_group_names: Optional[List[str]] = Field(None, alias="logGroupNames")
     metric_queries: Optional[List[MetricQuery]] = Field(None, alias="metricQueries")
 

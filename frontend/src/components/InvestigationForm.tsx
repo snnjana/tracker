@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { InvestigationInput } from '../types';
+import { Eye, EyeOff } from 'lucide-react';
 
 interface InvestigationFormProps {
   onSubmit: (input: InvestigationInput) => void;
@@ -18,6 +19,11 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
   const [repoUrl, setRepoUrl] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [githubToken, setGithubToken] = useState(() => {
+    // Persist token in localStorage so user doesn't have to re-enter it
+    return localStorage.getItem('github_token') || '';
+  });
+  const [showToken, setShowToken] = useState(false);
 
   // Calculate min/max constraints for end time based on start time
   const endTimeConstraints = useMemo(() => {
@@ -63,6 +69,11 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Save token to localStorage
+    if (githubToken) {
+      localStorage.setItem('github_token', githubToken);
+    }
+
     const input: InvestigationInput = {
       repoUrl,
       timeRange: {
@@ -70,6 +81,10 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
         end: new Date(endTime).toISOString(),
       },
     };
+
+    if (githubToken.trim()) {
+      input.githubToken = githubToken.trim();
+    }
 
     onSubmit(input);
   };
@@ -86,6 +101,37 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
           onChange={(e) => setRepoUrl(e.target.value)}
           required
         />
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="github-token">
+          GitHub Token <span className="hint">(required for private repos, recommended to avoid rate limits)</span>
+        </label>
+        <div className="token-input-wrapper">
+          <input
+            id="github-token"
+            type="text"
+            style={{ WebkitTextSecurity: showToken ? 'none' : 'disc' }}
+            placeholder="ghp_xxxxxxxxxxxx"
+            value={githubToken}
+            onChange={(e) => setGithubToken(e.target.value)}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            className="token-toggle-btn"
+            onClick={() => setShowToken(!showToken)}
+            aria-label={showToken ? 'Hide token' : 'Show token'}
+          >
+            {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        <span className="hint token-hint">
+          Saved in your browser only. Generate at{' '}
+          <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">
+            github.com/settings/tokens
+          </a>
+        </span>
       </div>
 
       <div className="form-group">

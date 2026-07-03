@@ -14,6 +14,7 @@ export interface MetricQuery {
 export interface InvestigationInput {
   repoUrl: string;
   timeRange: TimeRange;
+  githubToken?: string;
 }
 
 export interface TimeWindow {

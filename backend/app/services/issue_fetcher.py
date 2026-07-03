@@ -11,7 +11,7 @@ MAX_ISSUES = 50
 
 
 async def fetch_issues(
-    owner: str, repo: str, time_window: TimeWindow
+    owner: str, repo: str, time_window: TimeWindow, github_token: str | None = None
 ) -> List[IssueData] | ErrorResponse:
     """Fetch issues from GitHub created or updated within the given time window.
 
@@ -21,12 +21,14 @@ async def fetch_issues(
         owner: GitHub repository owner.
         repo: GitHub repository name.
         time_window: The investigation time window.
+        github_token: Optional user-provided GitHub token.
 
     Returns:
         List of IssueData on success, or ErrorResponse on failure.
     """
     try:
-        token = settings.GITHUB_TOKEN
+        # Prefer user-provided token, fall back to .env config
+        token = github_token or settings.GITHUB_TOKEN
         if token:
             auth = Auth.Token(token)
             g = Github(auth=auth, retry=None, per_page=100)

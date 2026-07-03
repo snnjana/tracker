@@ -15,7 +15,7 @@ MAX_TOTAL_PATCH_LENGTH = 8000  # Total patch per commit
 
 
 async def fetch_commits(
-    owner: str, repo: str, time_window: TimeWindow
+    owner: str, repo: str, time_window: TimeWindow, github_token: str | None = None
 ) -> List[CommitData] | ErrorResponse:
     """Fetch commits from GitHub within the given time window.
 
@@ -32,7 +32,8 @@ async def fetch_commits(
         List of CommitData on success, or ErrorResponse on failure.
     """
     try:
-        token = settings.GITHUB_TOKEN
+        # Prefer user-provided token, fall back to .env config
+        token = github_token or settings.GITHUB_TOKEN
         if token:
             auth = Auth.Token(token)
             g = Github(auth=auth, retry=None, per_page=100)

@@ -45,12 +45,15 @@ async def investigate(input_data: InvestigationInput):
 
     owner, repo, time_window = validation_result
 
+    # Use user-provided GitHub token if available, otherwise fall back to .env
+    github_token = input_data.github_token or None
+
     # Step 2: Fetch data in parallel
     log_group_names = input_data.log_group_names or []
     metric_queries = input_data.metric_queries or []
 
-    commits_task = fetch_commits(owner, repo, time_window)
-    issues_task = fetch_issues(owner, repo, time_window)
+    commits_task = fetch_commits(owner, repo, time_window, github_token=github_token)
+    issues_task = fetch_issues(owner, repo, time_window, github_token=github_token)
     logs_task = fetch_logs(log_group_names, time_window)
     metrics_task = fetch_metrics(metric_queries, time_window)
 
