@@ -6,7 +6,7 @@ function App() {
       <header className="app-header">
         <h1>🔍 AI Incident Timeline Correlator</h1>
         <p className="subtitle">
-          Investigate GitHub commits and issues to identify incident root causes
+          Investigate GitHub commits and issues to identify incident root causes.
         </p>
       </header>
       <main>

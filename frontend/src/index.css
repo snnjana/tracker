@@ -44,7 +44,7 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
-  background-color: var(--color-bg);
+  background-color: black;
   color: var(--color-text);
   line-height: 1.7;
   min-height: 100vh;
@@ -100,7 +100,7 @@ body {
 }
 
 .app-header .subtitle {
-  color: var(--color-text-muted);
+  color: white;
   font-size: 1rem;
   margin-top: 0.5rem;
 }
@@ -141,7 +141,7 @@ body {
   font-size: 0.85rem;
   font-weight: 600;
   margin-bottom: 0.5rem;
-  color: var(--color-text-muted);
+  color: white;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -231,7 +231,7 @@ body {
 .hint {
   font-weight: 400;
   font-size: 0.75rem;
-  color: var(--color-text-dim);
+  color: white;
   text-transform: none;
   letter-spacing: 0;
 }

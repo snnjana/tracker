@@ -8,7 +8,7 @@ from app.routers import investigate
 
 app = FastAPI(
     title="AI Incident Timeline Correlator",
-    description="Correlates GitHub commits with AWS CloudWatch data to identify incident root causes.",
+    description="Investigate GitHub commits and issues to identify incident root causes.",
     version="1.0.0",
 )
 
