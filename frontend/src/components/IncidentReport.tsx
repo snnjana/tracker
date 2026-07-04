@@ -50,7 +50,7 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
 }
 
-function CollapsibleSection({ icon, title, defaultOpen = true, children }: CollapsibleSectionProps) {
+function CollapsibleSection({ title, defaultOpen = true, children }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
