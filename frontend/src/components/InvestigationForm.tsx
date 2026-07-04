@@ -119,7 +119,7 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
           </button>
         </div>
         <span className="hint token-hint">
-          Saved in your browser only. Generate at{' '}
+          Generate at{' '}
           <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">
             github.com/settings/tokens
           </a>
