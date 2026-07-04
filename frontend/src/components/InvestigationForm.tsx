@@ -19,10 +19,7 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
   const [repoUrl, setRepoUrl] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  const [githubToken, setGithubToken] = useState(() => {
-    // Persist token in localStorage so user doesn't have to re-enter it
-    return localStorage.getItem('github_token') || '';
-  });
+  const [githubToken, setGithubToken] = useState('');
   const [showToken, setShowToken] = useState(false);
 
   // Calculate min/max constraints for end time based on start time
@@ -68,11 +65,6 @@ function InvestigationForm({ onSubmit, isLoading }: InvestigationFormProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Save token to localStorage
-    if (githubToken) {
-      localStorage.setItem('github_token', githubToken);
-    }
 
     const input: InvestigationInput = {
       repoUrl,
