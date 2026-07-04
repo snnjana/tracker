@@ -2,476 +2,430 @@
 
 ## Overview
 
-The Incident Timeline Correlator is a TypeScript/Node.js CLI tool that helps engineers identify root causes of production incidents by correlating GitHub commit history with AWS CloudWatch observability data. It orchestrates data fetching from GitHub and AWS APIs, sends the combined data to Amazon Bedrock Claude for reasoning, and produces a structured incident report with a timeline, suspicious commits, root cause analysis, and rollback suggestions.
+The Incident Timeline Correlator is a web application with a **React + TypeScript frontend** and **Python FastAPI backend** that helps engineers identify root causes of production incidents by correlating GitHub commit history (with code diffs) and issues with AI-powered analysis via Groq. It orchestrates data fetching from the GitHub API, sends the combined data to Groq for reasoning, and produces a structured incident report.
 
-The system follows a pipeline architecture: Input Validation → Data Fetching (parallel) → Analysis → Report Generation. Each stage is a discrete, testable component with clear interfaces.
+The system follows a pipeline architecture: Input Validation → Data Fetching (parallel) → AI Analysis → Report Generation.
 
 ### Key Design Decisions
 
-- **TypeScript** for type safety, strong ecosystem support for AWS SDKs and GitHub APIs, and native JSON handling.
-- **Pipeline architecture** with discrete stages to enable independent testing, retry logic, and future extensibility (e.g., adding PagerDuty or Datadog sources).
-- **Parallel data fetching** for GitHub commits and CloudWatch data to minimize total latency.
-- **Structured error propagation** using discriminated union result types rather than thrown exceptions, enabling callers to handle errors explicitly.
+- **Python/FastAPI backend** for async request handling, Pydantic models, and easy integration with PyGithub and Groq SDK.
+- **React/TypeScript frontend** with Vite for fast development and type-safe component architecture.
+- **Groq AI** for analysis (fast inference, generous free tier, no AWS quota issues).
+- **Pipeline architecture** with discrete async stages enabling parallel data fetching.
+- **User-provided GitHub token** (in-memory only, never persisted) for private repo access and higher rate limits.
+- **No retries on GitHub API** — fail fast to avoid long backoff waits on rate limits.
+- **Commit diffs included** in prompts for code-level root cause analysis.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[CLI Input] --> B[Input Validator]
-    B --> C{Valid?}
-    C -->|No| D[Error Response]
-    C -->|Yes| E[Time Window Resolver]
-    E --> F[Commit Fetcher]
-    E --> G[Log Fetcher]
-    F --> H[Analysis Engine]
-    G --> H
-    H --> I[Report Generator]
-    I --> J[Incident Report JSON]
+    A[React Frontend] -->|POST /api/investigate| B[FastAPI Backend]
+    B --> C[Input Validator]
+    C --> D{Valid?}
+    D -->|No| E[Error Response]
+    D -->|Yes| F[Parallel Fetch]
     
-    subgraph "Data Fetching (Parallel)"
-        F
-        G
+    subgraph "Parallel Data Fetching"
+        G[Commit Fetcher]
+        H[Issue Fetcher]
     end
+    
+    F --> G
+    F --> H
+    G --> I[Analysis Engine]
+    H --> I
+    I --> J[Report Generator]
+    J --> K[Incident Report JSON]
+    K -->|Response| A
     
     subgraph "External Services"
-        K[GitHub API]
-        L[AWS CloudWatch]
-        M[Amazon Bedrock Claude]
+        L[GitHub API]
+        M[Groq API]
     end
     
-    F -.-> K
     G -.-> L
-    H -.-> M
+    H -.-> L
+    I -.-> M
 ```
 
 ### Component Flow
 
-1. **Input Validator** validates the GitHub URL format, time range constraints, or CloudWatch alarm ARN.
-2. **Time Window Resolver** either passes through the provided time range or resolves the alarm ARN to timestamps.
-3. **Commit Fetcher** and **Log Fetcher** run in parallel, each with retry logic.
-4. **Analysis Engine** constructs a prompt from the fetched data, manages token limits via truncation, and calls Bedrock Claude.
-5. **Report Generator** transforms the Bedrock response into a structured Incident Report.
+1. **Frontend** collects repo URL, time range, and optional GitHub token from user.
+2. **Input Validator** validates the GitHub URL format and time range constraints (max 7 days).
+3. **Commit Fetcher** and **Issue Fetcher** run in parallel, both using the user-provided or server-configured GitHub token.
+4. **Analysis Engine** constructs a prompt with commits (including diffs), issues, and time window, then calls Groq.
+5. **Report Generator** transforms the Groq response into a structured Incident Report, sanitizing variant field names and invalid types.
 
 ## Components and Interfaces
 
-### InputValidator
+### Backend Components
 
-Responsible for validating and normalizing user-provided input.
+| Component | Module | Responsibility |
+|-----------|--------|----------------|
+| InputValidator | `app/services/input_validator.py` | Validates GitHub URL pattern and time range constraints |
+| CommitFetcher | `app/services/commit_fetcher.py` | Fetches commits with diffs from GitHub API via PyGithub |
+| IssueFetcher | `app/services/issue_fetcher.py` | Fetches GitHub issues within time window via PyGithub |
+| AnalysisEngine | `app/services/analysis_engine.py` | Constructs prompts and calls Groq AI for reasoning |
+| ReportGenerator | `app/services/report_generator.py` | Maps AI response to structured IncidentReport schema |
+| InvestigateRouter | `app/routers/investigate.py` | FastAPI route handler for POST /api/investigate |
 
-```typescript
-interface InvestigationInput {
-  repoUrl: string;
-  timeRange?: { start: string; end: string }; // ISO 8601
-  alarmArn?: string;
-}
+### Frontend Components
 
-interface ValidationResult {
-  success: true;
-  data: ValidatedInput;
-} | {
-  success: false;
-  error: ValidationError;
-}
+| Component | Module | Responsibility |
+|-----------|--------|----------------|
+| InvestigationForm | `src/components/InvestigationForm.tsx` | Collects repo URL, token, time range from user |
+| IncidentReport | `src/components/IncidentReport.tsx` | Displays full incident report with collapsible sections |
+| Timeline | `src/components/Timeline.tsx` | Renders chronological timeline with colored markers |
+| ErrorDisplay | `src/components/ErrorDisplay.tsx` | Displays error messages from API |
+| APIClient | `src/api/client.ts` | HTTP client for backend communication |
 
-interface ValidatedInput {
-  owner: string;
-  repo: string;
-  timeWindow: TimeWindow;
-}
+### Interfaces
 
-interface TimeWindow {
-  start: Date;
-  end: Date;
-}
+#### InputValidator
 
-interface ValidationError {
-  code: 'INVALID_URL' | 'INVALID_TIME_RANGE' | 'TIME_RANGE_EXCEEDS_MAX' | 'MISSING_TIME_SOURCE' | 'INVALID_ALARM';
-  message: string;
-}
+```python
+class InputValidator:
+    def validate(self, input: InvestigationInput) -> TimeWindow:
+        """Validates repo URL pattern and time range. Returns TimeWindow or raises ValueError."""
+        ...
 ```
 
-### TimeWindowResolver
+- Validates URL matches `https://github.com/{owner}/{repo}`
+- Validates start < end
+- Validates duration ≤ 168 hours (7 days)
+- Returns parsed `TimeWindow` on success
 
-Resolves a CloudWatch alarm ARN into a concrete TimeWindow.
+#### CommitFetcher
 
-```typescript
-interface TimeWindowResolver {
-  resolveFromAlarm(alarmArn: string): Promise<Result<TimeWindow, ResolverError>>;
-}
-
-type ResolverError = {
-  code: 'ALARM_NOT_FOUND' | 'INVALID_ARN' | 'AWS_AUTH_ERROR';
-  message: string;
-};
+```python
+class CommitFetcher:
+    async def fetch(self, repo_url: str, time_window: TimeWindow, token: str | None) -> list[CommitData]:
+        """Fetches up to 250 commits within time window. Fails fast on errors."""
+        ...
 ```
 
-### CommitFetcher
+- Uses PyGithub with provided or server-configured token
+- Includes patch/diff content (2,000 chars/file, 8,000 total/commit)
+- No retries on failure
 
-Retrieves commit data from the GitHub API.
+#### IssueFetcher
 
-```typescript
-interface CommitFetcher {
-  fetchCommits(owner: string, repo: string, window: TimeWindow): Promise<Result<CommitList, FetchError>>;
-}
-
-interface CommitData {
-  sha: string;          // 40-character hex
-  author: string;
-  authorEmail: string;
-  timestamp: string;    // ISO 8601
-  message: string;      // up to 72,000 chars
-  changedFiles: string[]; // up to 3,000 files
-}
-
-interface CommitList {
-  commits: CommitData[];  // up to 250
-  warning?: string;       // e.g., "no commits found"
-}
-
-type FetchError = {
-  code: 'AUTH_ERROR' | 'RATE_LIMITED' | 'API_UNAVAILABLE';
-  message: string;
-  resetTime?: string;     // for rate limit
-};
+```python
+class IssueFetcher:
+    async def fetch(self, repo_url: str, time_window: TimeWindow, token: str | None) -> list[IssueData]:
+        """Fetches up to 50 issues (open + closed) within time window. Fails fast on errors."""
+        ...
 ```
 
-### LogFetcher
+- Fetches issues created or updated within time window
+- Truncates body to 500 characters
+- No retries on failure
 
-Retrieves CloudWatch logs and metrics.
+#### AnalysisEngine
 
-```typescript
-interface LogFetcher {
-  fetchLogs(logGroups: string[], window: TimeWindow): Promise<Result<LogEventList, FetchError>>;
-  fetchMetrics(metrics: MetricQuery[], window: TimeWindow): Promise<Result<MetricDataList, FetchError>>;
-}
-
-interface LogEvent {
-  timestamp: string;    // ISO 8601
-  logGroup: string;
-  logStream: string;
-  message: string;      // up to 4,000 chars
-}
-
-interface LogEventList {
-  events: LogEvent[];   // up to 10,000
-  warning?: string;
-}
-
-interface MetricDataPoint {
-  timestamp: string;    // ISO 8601
-  metricName: string;
-  namespace: string;
-  value: number;
-  unit: string;
-}
-
-interface MetricDataList {
-  dataPoints: MetricDataPoint[];
-  warning?: string;
-}
-
-interface MetricQuery {
-  metricName: string;
-  namespace: string;
-  dimensions?: Record<string, string>;
-}
-
-type FetchError = {
-  code: 'AWS_AUTH_ERROR' | 'LOG_GROUP_NOT_FOUND' | 'METRIC_NOT_FOUND' | 'THROTTLED' | 'API_UNAVAILABLE';
-  message: string;
-  details?: string;
-};
+```python
+class AnalysisEngine:
+    async def analyze(self, commits: list[CommitData], issues: list[IssueData], time_window: TimeWindow) -> dict:
+        """Constructs prompt and calls Groq AI. Returns parsed JSON response."""
+        ...
 ```
 
-### AnalysisEngine
+- Constructs prompt with commits (including diffs), issues, and time window boundaries
+- Token budget: 60,000 characters max
+- Truncation priority: preserve all commits and issues, truncate logs first
+- Calls Groq API with configured model (default: `llama-3.3-70b-versatile`)
 
-Constructs the prompt, manages token limits, and calls Bedrock Claude.
+#### ReportGenerator
 
-```typescript
-interface AnalysisEngine {
-  analyze(data: AnalysisInput): Promise<Result<AnalysisOutput, AnalysisError>>;
-}
-
-interface AnalysisInput {
-  commits: CommitData[];
-  logEvents: LogEvent[];
-  metricDataPoints: MetricDataPoint[];
-  timeWindow: TimeWindow;
-}
-
-interface AnalysisOutput {
-  timeline: TimelineEntry[];
-  suspiciousCommits: SuspiciousCommit[];
-  rootCause: string;
-  suggestedRollbacks: RollbackSuggestion[];
-}
-
-type AnalysisError = {
-  code: 'BEDROCK_ERROR' | 'AUTH_ERROR' | 'TIMEOUT';
-  message: string;
-  details?: string;
-};
+```python
+class ReportGenerator:
+    def generate(self, ai_response: dict, time_window: TimeWindow, issues: list[IssueData]) -> IncidentReport:
+        """Maps AI response to IncidentReport, handling variant keys and invalid types."""
+        ...
 ```
 
-### ReportGenerator
+- Handles variant key names (camelCase, snake_case) from AI response
+- Sanitizes invalid timeline entry types (infers from content)
+- Auto-generates rollback commands from suspicious commits if AI omits them
+- Truncates root cause to 500 characters
 
-Transforms analysis output into the final IncidentReport and handles serialization/parsing.
+#### REST API
 
-```typescript
-interface ReportGenerator {
-  generate(analysis: AnalysisOutput, timeWindow: TimeWindow): IncidentReport;
-  serialize(report: IncidentReport): string;
-  parse(json: string): Result<IncidentReport, ParseError>;
-}
-
-type ParseError = {
-  code: 'INVALID_JSON' | 'SCHEMA_VIOLATION';
-  message: string;
-  fieldErrors?: FieldError[];
-};
-
-interface FieldError {
-  field: string;
-  reason: string;
-}
+```
+POST /api/investigate
+  Request Body: InvestigationInput (JSON)
+  Response 200: IncidentReport (JSON)
+  Response 400: ErrorResponse (validation errors)
+  Response 401: ErrorResponse (auth errors)
+  Response 429: ErrorResponse (rate limit)
+  Response 500: ErrorResponse (server/API errors)
 ```
 
 ## Data Models
 
-### IncidentReport
+### Core Models (Pydantic)
 
-```typescript
-interface IncidentReport {
-  timeWindow: {
-    start: string;  // ISO 8601
-    end: string;    // ISO 8601
-  };
-  timeline: TimelineEntry[];
-  suspiciousCommits: SuspiciousCommit[];
-  rootCause: string;           // max 500 chars
-  suggestedRollback: RollbackSuggestion[];
-}
+```python
+class TimeRange(BaseModel):
+    start: str          # ISO 8601 timestamp
+    end: str            # ISO 8601 timestamp
 
-interface TimelineEntry {
-  timestamp: string;   // ISO 8601
-  type: 'commit' | 'log_event' | 'metric_data_point';
-  summary: string;
-  details: CommitData | LogEvent | MetricDataPoint;
-}
+class InvestigationInput(BaseModel):
+    repo_url: str              # GitHub URL (alias: repoUrl)
+    time_range: TimeRange | None  # Required (alias: timeRange)
+    github_token: str | None   # User-provided, in-memory only (alias: githubToken)
 
-interface SuspiciousCommit {
-  sha: string;
-  confidence: 'High' | 'Medium' | 'Low';
-  explanation: string;
-}
+class TimeWindow(BaseModel):
+    start: datetime
+    end: datetime
 
-interface RollbackSuggestion {
-  sha: string;
-  command: string;  // e.g., "git revert abc123"
-}
+class CommitData(BaseModel):
+    sha: str               # 40-char hex
+    author: str
+    author_email: str      # alias: authorEmail
+    timestamp: str         # ISO 8601
+    message: str           # up to 72,000 chars
+    changed_files: list[str]  # up to 3,000 files (alias: changedFiles)
+    patch: str | None      # Combined diff content
+
+class IssueData(BaseModel):
+    number: int
+    title: str
+    state: str             # "open" or "closed"
+    created_at: str        # alias: createdAt
+    updated_at: str        # alias: updatedAt
+    labels: list[str]
+    body: str | None       # Truncated to 500 chars
+    url: str               # HTML URL
+
+class SuspiciousCommit(BaseModel):
+    sha: str
+    confidence: Literal["High", "Medium", "Low"]
+    explanation: str
+
+class RollbackSuggestion(BaseModel):
+    sha: str
+    command: str           # e.g., "git revert {sha}"
+
+class TimelineEntry(BaseModel):
+    timestamp: str
+    type: Literal["commit", "log_event", "metric_data_point"]
+    summary: str
+    details: dict
+
+class IncidentReport(BaseModel):
+    time_window: TimeWindow       # alias: timeWindow
+    timeline: list[TimelineEntry]
+    suspicious_commits: list[SuspiciousCommit]  # alias: suspiciousCommits
+    root_cause: str               # max 500 chars (alias: rootCause)
+    suggested_rollback: list[RollbackSuggestion]  # alias: suggestedRollback
+    issues: list[IssueData] | None
+
+class ErrorResponse(BaseModel):
+    code: str       # Machine-readable (AUTH_ERROR, RATE_LIMITED, etc.)
+    message: str    # Human-readable explanation
+    details: str | None
 ```
 
-### Token Budget Management
+### Model Relationships
 
-```typescript
-interface TokenBudget {
-  maxTokens: number;          // Bedrock Claude context window limit
-  commitTokens: number;       // Always preserved
-  metricTokens: number;       // Second priority
-  logTokens: number;          // Truncated first
-  promptOverhead: number;     // System prompt + framing
-}
+```mermaid
+erDiagram
+    InvestigationInput ||--|| TimeRange : contains
+    IncidentReport ||--|| TimeWindow : has
+    IncidentReport ||--|{ TimelineEntry : contains
+    IncidentReport ||--|{ SuspiciousCommit : identifies
+    IncidentReport ||--|{ RollbackSuggestion : suggests
+    IncidentReport ||--o{ IssueData : includes
 ```
 
-### Result Type
+### Field Aliasing
 
-```typescript
-type Result<T, E> = 
-  | { success: true; data: T }
-  | { success: false; error: E };
-```
-
-
+All models support both camelCase (frontend JSON) and snake_case (Python) via Pydantic's `populate_by_name = True` config and field aliases.
 
 ## Correctness Properties
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-### Property 1: GitHub URL Validation
+### Property 1: Input validation accepts valid inputs and rejects invalid ones
 
-*For any* string, the InputValidator SHALL accept it as a valid GitHub repository URL if and only if it matches the pattern `https://github.com/{owner}/{repo}` where owner and repo are non-empty strings containing valid GitHub characters. All other strings SHALL be rejected with an INVALID_URL error.
+*For any* GitHub URL and time range pair, the InputValidator SHALL accept the input if and only if the URL matches `https://github.com/{owner}/{repo}`, start < end, and duration ≤ 168 hours; otherwise it SHALL return a descriptive error.
 
-**Validates: Requirements 1.1, 1.3**
+**Validates: Requirements 1.1, 1.2, 1.3, 1.5**
 
-### Property 2: Time Range Validation
+### Property 2: Commit data field extraction completeness
 
-*For any* pair of ISO 8601 timestamps (start, end), the InputValidator SHALL accept the time range if and only if start is strictly earlier than end AND the duration between start and end does not exceed 72 hours. Time ranges where start >= end SHALL produce an INVALID_TIME_RANGE error, and time ranges exceeding 72 hours SHALL produce a TIME_RANGE_EXCEEDS_MAX error.
-
-**Validates: Requirements 1.4, 1.7**
-
-### Property 3: Commit Data Mapping
-
-*For any* GitHub API commit response containing a SHA, author details, timestamp, message, and changed files, the Commit_Fetcher's mapping function SHALL produce a CommitData object with: a 40-character SHA, author name, author email, ISO 8601 timestamp, message truncated to 72,000 characters, and changed files list truncated to 3,000 entries.
+*For any* GitHub API commit response object, the CommitFetcher SHALL extract all required fields (sha, author, author_email, timestamp, message, changed_files, patch) and the resulting CommitData object SHALL contain the same values as the source.
 
 **Validates: Requirements 2.2**
 
-### Property 4: Log Event Mapping and Truncation
+### Property 3: Issue body truncation
 
-*For any* CloudWatch log event with arbitrary message content, the Log_Fetcher's mapping function SHALL produce a LogEvent object containing the timestamp, log group name, log stream name, and message content truncated to at most 4,000 characters. The first 4,000 characters of the original message SHALL be preserved.
+*For any* GitHub issue with a body of arbitrary length, the IssueFetcher SHALL produce an IssueData where the body field is at most 500 characters, and if the original body was ≤ 500 characters it SHALL be preserved exactly.
 
-**Validates: Requirements 3.3**
+**Validates: Requirements 3.2**
 
-### Property 5: Metric Data Point Mapping
+### Property 4: Prompt contains all input data
 
-*For any* CloudWatch metric data point, the Log_Fetcher's mapping function SHALL produce a MetricDataPoint object containing all required fields: timestamp, metric name, namespace, value, and unit.
+*For any* non-empty set of commits and issues with a valid time window, the prompt constructed by the AnalysisEngine SHALL contain every commit SHA and every issue number from the input datasets.
 
-**Validates: Requirements 3.4**
+**Validates: Requirements 4.1, 4.2**
 
-### Property 6: Prompt Construction Completeness
+### Property 5: Truncation preserves commits and issues
 
-*For any* set of commits, log events, metric data points, and time window, the Analysis_Engine's prompt construction SHALL produce a prompt string that contains a representation of every commit, every log event, every metric data point, and both time window boundaries.
+*For any* combined dataset exceeding 60,000 characters, the AnalysisEngine's truncation logic SHALL preserve all commit entries and all issue entries in the resulting prompt, while reducing total size to within the token budget.
 
-**Validates: Requirements 4.2**
+**Validates: Requirements 4.5**
 
-### Property 7: Token-Aware Truncation Ordering
+### Property 6: Timeline chronological ordering
 
-*For any* combined dataset (commits, log events, metric data points) that exceeds the configured token limit, the Analysis_Engine's truncation logic SHALL: (1) always preserve all commits, (2) remove the oldest log events first until the limit is met or all logs are exhausted, and (3) if still over the limit, remove the oldest metric data points until the limit is met. The resulting prompt SHALL fit within the token limit.
-
-**Validates: Requirements 4.5, 4.6**
-
-### Property 8: Timeline Chronological Ordering
-
-*For any* set of timeline entries with various timestamps, the Report Generator SHALL produce a timeline sorted in ascending chronological order by timestamp. For entries sharing identical timestamps, the ordering SHALL be: commits first, then log events, then metric data points.
+*For any* set of timeline entries in an IncidentReport, the entries SHALL be ordered by timestamp in ascending chronological order.
 
 **Validates: Requirements 5.2**
 
-### Property 9: Root Cause Length Constraint
+### Property 7: Root cause length invariant
 
-*For any* analysis output containing a root cause string, the Incident_Report SHALL include a root cause summary that is at most 500 characters. If the AI-produced root cause exceeds 500 characters, it SHALL be truncated to exactly 500 characters.
+*For any* AI response containing a root cause string, the ReportGenerator SHALL produce a root_cause field of at most 500 characters.
 
 **Validates: Requirements 5.4**
 
-### Property 10: Rollback Command Format
+### Property 8: Rollback auto-generation from suspicious commits
 
-*For any* suspicious commit identified for rollback with a given SHA, the suggested rollback section SHALL contain a command string matching the format `git revert {sha}` where `{sha}` is the full 40-character commit SHA.
+*For any* AI response that identifies suspicious commits but provides no explicit rollback suggestions, the ReportGenerator SHALL auto-generate a rollback suggestion for each suspicious commit with a command matching `git revert {sha}`.
 
 **Validates: Requirements 5.5**
 
-### Property 11: Incident Report Serialization Round-Trip
+### Property 9: Variant key normalization
 
-*For any* valid IncidentReport object, serializing it to JSON and then parsing the resulting JSON back SHALL produce an IncidentReport object with field-by-field equality to the original across all sections (Timeline, Suspicious Commits, Root Cause, Suggested Rollback).
+*For any* AI response containing timeline, suspicious commit, or rollback data using variant key names (camelCase or snake_case), the ReportGenerator SHALL correctly map all keys to the canonical IncidentReport schema.
+
+**Validates: Requirements 5.8**
+
+### Property 10: Invalid timeline type sanitization
+
+*For any* timeline entry with a type value not in the set {"commit", "log_event", "metric_data_point"}, the ReportGenerator SHALL infer the correct type from entry content or default to "log_event".
+
+**Validates: Requirements 5.9**
+
+### Property 11: Incident report serialization round-trip
+
+*For any* valid IncidentReport object, serializing it to JSON and parsing the resulting JSON back SHALL produce an equivalent IncidentReport object.
 
 **Validates: Requirements 6.1, 6.2, 6.3**
 
-### Property 12: Schema Violation Error Reporting
+### Property 12: Invalid input produces descriptive errors
 
-*For any* valid JSON object that does not conform to the IncidentReport schema (missing required fields, incorrect field types, or invalid enum values), the parser SHALL return a SCHEMA_VIOLATION error that identifies each specific field that is invalid or missing.
+*For any* input that is either syntactically invalid JSON or valid JSON that does not conform to the IncidentReport schema, the parser SHALL return a descriptive error rather than a valid IncidentReport.
 
-**Validates: Requirements 6.4**
+**Validates: Requirements 6.4, 6.5**
 
 ## Error Handling
 
-### Error Propagation Strategy
-
-The system uses a `Result<T, E>` type throughout, avoiding thrown exceptions for expected error conditions. Each component returns typed errors that the orchestrator can handle or propagate to the user.
-
-### Error Categories
-
 | Category | Source | Behavior |
 |----------|--------|----------|
-| Validation Errors | InputValidator | Returned immediately, no retries |
-| Authentication Errors | GitHub API, AWS APIs, Bedrock | Returned immediately with credential guidance |
-| Rate Limit / Throttling | GitHub API, CloudWatch | Retry 3× with exponential backoff, then error |
-| Server Errors | GitHub API, CloudWatch | Retry 3× with exponential backoff, then error |
-| Timeout | Bedrock API | 60-second timeout, no retry |
-| Parse Errors | Report Parser | Returned immediately with field-level details |
-
-### Retry Strategy
-
-```typescript
-interface RetryConfig {
-  maxAttempts: 3;
-  baseDelayMs: 1000;
-  maxDelayMs: 10000;
-  backoffMultiplier: 2;
-}
-```
-
-Retries apply only to transient errors (5xx, throttling). Authentication errors, validation errors, and not-found errors are never retried.
+| Validation Errors | InputValidator | Returned immediately (400) |
+| Auth Errors | GitHub API, Groq | Returned immediately with guidance (401) |
+| Rate Limits | GitHub API, Groq | Returned immediately, no retries (429) |
+| Not Found | GitHub API | Returned immediately (404 on repo) |
+| Parse Errors | Groq response | Returned with raw response snippet (500) |
+| Server Errors | GitHub API, Groq | Returned immediately, no retries (500) |
 
 ### Error Response Format
 
-All errors returned to the user include:
-- A machine-readable error code
-- A human-readable message describing what went wrong
-- Context-specific details (e.g., which log group was not found, when the rate limit resets)
+```python
+class ErrorResponse(BaseModel):
+    code: str       # Machine-readable (AUTH_ERROR, RATE_LIMITED, VALIDATION_ERROR, etc.)
+    message: str    # Human-readable explanation
+    details: str | None  # Additional context (e.g., raw response snippet)
+```
 
-### Graceful Degradation
+### Error Codes
 
-- If no commits are found, the system proceeds with an empty commit list and includes a warning.
-- If no log events or metrics are found, the system proceeds with empty collections and includes warnings.
-- The system never silently drops data — any truncation or omission is reported to the user.
+| Code | HTTP Status | Meaning |
+|------|-------------|---------|
+| `VALIDATION_ERROR` | 400 | Invalid URL, time range, or missing fields |
+| `AUTH_ERROR` | 401 | Invalid or expired GitHub/Groq token |
+| `NOT_FOUND` | 404 | Repository does not exist or is inaccessible |
+| `RATE_LIMITED` | 429 | GitHub or Groq API rate limit exceeded |
+| `ANALYSIS_FAILED` | 500 | Groq returned unparseable response |
+| `GITHUB_UNAVAILABLE` | 500 | GitHub API unreachable or server error |
+| `GROQ_UNAVAILABLE` | 500 | Groq API unreachable or server error |
 
 ## Testing Strategy
 
-### Property-Based Testing
+### Unit Tests (pytest for backend, Vitest for frontend)
 
-This feature uses **fast-check** (TypeScript property-based testing library) for property tests. Each property test runs a minimum of 100 iterations with randomly generated inputs.
+**Backend unit tests** cover:
+- InputValidator: valid/invalid URLs, time range edge cases, duration boundary (168h)
+- CommitFetcher: field extraction from mocked PyGithub objects, patch truncation
+- IssueFetcher: field extraction from mocked PyGithub objects, body truncation
+- AnalysisEngine: prompt construction, truncation logic, error handling
+- ReportGenerator: variant key mapping, type inference, rollback auto-generation, root cause truncation
+- Models: Pydantic serialization/deserialization, alias handling
 
-Property-based tests validate the universal correctness properties defined in the Correctness Properties section. They are tagged with references to the specific property they implement:
+**Frontend unit tests** cover:
+- InvestigationForm: input validation, 7-day constraint, token visibility toggle
+- IncidentReport: rendering with various data shapes
+- Timeline: chronological rendering, empty state
+- ErrorDisplay: error code to message mapping
+- APIClient: request formatting, error response parsing
 
-```typescript
-// Feature: incident-timeline-correlator, Property 11: Incident Report Serialization Round-Trip
+### Property-Based Tests (Hypothesis for Python)
+
+Property-based tests validate universal correctness properties across generated inputs. Each test runs a minimum of 100 iterations.
+
+| Property | Test Target | Generator Strategy |
+|----------|-------------|-------------------|
+| Property 1: Input validation | `InputValidator.validate()` | Random URLs (valid/invalid patterns) + random time ranges |
+| Property 2: Commit field extraction | `CommitFetcher` mapping logic | Random GitHub API commit response dicts |
+| Property 3: Issue body truncation | `IssueFetcher` mapping logic | Random strings of varying length for body |
+| Property 4: Prompt completeness | `AnalysisEngine.build_prompt()` | Random lists of CommitData and IssueData |
+| Property 5: Truncation preserves data | `AnalysisEngine.truncate()` | Large random datasets exceeding 60,000 chars |
+| Property 6: Timeline ordering | `ReportGenerator` sorting | Random lists of TimelineEntry with varied timestamps |
+| Property 7: Root cause length | `ReportGenerator.generate()` | Random strings of length 0–2000 |
+| Property 8: Rollback auto-generation | `ReportGenerator.generate()` | Random suspicious commits with empty rollback lists |
+| Property 9: Key normalization | `ReportGenerator` mapping | Random dicts with camelCase/snake_case variants |
+| Property 10: Type sanitization | `ReportGenerator` type inference | Random timeline entries with invalid type values |
+| Property 11: Serialization round-trip | `IncidentReport` model | Random valid IncidentReport objects via Hypothesis strategies |
+| Property 12: Invalid input errors | `IncidentReport` parser | Random invalid JSON and non-conforming dicts |
+
+**Library:** Hypothesis (Python) with custom strategies for domain objects.
+
+**Configuration:**
+- Minimum 100 examples per property (`@settings(max_examples=100)`)
+- Each test tagged with: `# Feature: incident-timeline-correlator, Property {N}: {description}`
+
+### Integration Tests (pytest)
+
+- End-to-end `/api/investigate` with mocked GitHub + Groq responses
+- Error propagation from GitHub API failures
+- Error propagation from Groq API failures
+- Token fallback behavior (user token → server token → no token)
+
+### Test Tools
+
+| Layer | Framework | Runner |
+|-------|-----------|--------|
+| Backend unit + property | pytest + Hypothesis | `pytest` |
+| Frontend unit | Vitest + React Testing Library | `vitest --run` |
+| Integration | pytest | `pytest -m integration` |
+
+## Security Considerations
+
+- GitHub tokens are **never persisted** server-side (in-memory only per request)
+- Frontend stores token in React state only (no localStorage, no sessionStorage)
+- Tokens cleared on page reload
+- Server `.env` file is in `.gitignore`
+- CORS restricted to localhost development origins
+
+## Configuration
+
+```
+# backend/.env
+GROQ_API_KEY=gsk_...           # Required: Groq API key for AI analysis
+GROQ_MODEL=llama-3.3-70b-versatile  # Optional: model override
+GITHUB_TOKEN=ghp_...           # Optional: fallback server token
 ```
 
-**Applicable properties for PBT:**
-- Property 1: GitHub URL validation (generate random strings, verify accept/reject)
-- Property 2: Time range validation (generate random timestamp pairs)
-- Property 3: Commit data mapping (generate random API responses)
-- Property 4: Log event mapping and truncation (generate random messages)
-- Property 5: Metric data point mapping (generate random metric data)
-- Property 6: Prompt construction completeness (generate random datasets)
-- Property 7: Token-aware truncation ordering (generate datasets of varying sizes)
-- Property 8: Timeline chronological ordering (generate events with various timestamps)
-- Property 9: Root cause length constraint (generate strings of varying lengths)
-- Property 10: Rollback command format (generate random SHAs)
-- Property 11: Serialization round-trip (generate random valid IncidentReport objects)
-- Property 12: Schema violation error reporting (generate random invalid JSON objects)
-
-### Unit Tests (Example-Based)
-
-Unit tests cover specific scenarios, edge cases, and integration error handling:
-
-- Input with missing time source returns appropriate error (Req 1.6)
-- GitHub API 401 returns AUTH_ERROR (Req 2.3)
-- GitHub API 429 returns RATE_LIMITED with reset time (Req 2.4)
-- Empty commit list includes warning (Req 2.5)
-- Retry logic executes 3 times with backoff (Req 2.6, 3.9)
-- AWS auth error returns proper error (Req 3.5)
-- Missing log group identified in error (Req 3.6)
-- Missing metric identified in error (Req 3.7)
-- Empty CloudWatch results include warning (Req 3.8)
-- Bedrock error includes details (Req 4.3)
-- Bedrock auth error returns credential guidance (Req 4.4)
-- Bedrock timeout at 60 seconds (Req 4.7)
-- Report generated within 5 seconds (Req 5.1)
-- Suspicious commits include confidence and explanation (Req 5.3)
-- Report contains all labeled sections (Req 5.6)
-- No suspicious commits produces note (Req 5.7)
-- Invalid JSON returns parse error (Req 6.5)
-
-### Integration Tests
-
-Integration tests verify end-to-end behavior with mocked external services:
-
-- Full pipeline: valid input → GitHub fetch → CloudWatch fetch → Bedrock analysis → report generation
-- Pipeline with CloudWatch alarm resolution as time source
-- Pipeline with empty commits (graceful degradation)
-- Pipeline with data exceeding token limits (truncation behavior)
-
-### Test Infrastructure
-
-- **Test runner**: Vitest (fast, TypeScript-native)
-- **Property testing**: fast-check
-- **Mocking**: Vitest built-in mocking for external API clients
-- **CI configuration**: All property tests run with 100 iterations; unit tests run on every push
+The user's GitHub token provided via the UI takes priority over the server `.env` token. It is held in memory only during the request and never written to disk.
