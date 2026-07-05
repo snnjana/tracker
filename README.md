@@ -1,148 +1,144 @@
 # AI Incident Timeline Correlator
 
-A web application that correlates GitHub commit history with AWS CloudWatch logs and metrics to identify root causes of production incidents. Uses Amazon Bedrock Claude for intelligent analysis.
+A web application that helps engineers identify root causes of production incidents by correlating GitHub commit history (with code diffs) and issues using AI-powered analysis via Groq.
 
-## Architecture
+## How It Works
 
-- **Backend**: Python FastAPI server handling data fetching, AI analysis, and report generation
-- **Frontend**: React + TypeScript SPA with Vite for the investigation interface
+1. Paste a GitHub repository URL and select a time range (up to 7 days)
+2. Optionally provide your GitHub token for private repo access
+3. The tool fetches commits (with diffs) and issues from that window
+4. Groq AI analyzes the data to identify correlations
+5. You get a structured report with:
+   - Chronological timeline of events
+   - Suspicious commits with confidence levels and code-level explanations
+   - Related GitHub issues
+   - Root cause summary
+   - Suggested rollback commands
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite |
+| Backend | Python 3.11+, FastAPI, Pydantic |
+| GitHub Integration | PyGithub |
+| AI Analysis | Groq SDK (`llama-3.3-70b-versatile`) |
+| Styling | Custom CSS (dark theme, glassmorphism) |
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 18+
-- AWS credentials configured (for CloudWatch and Bedrock access)
-- GitHub token (optional, for private repos or higher rate limits)
+- A Groq API key ([get one free](https://console.groq.com/keys))
 
-## Environment Variables
+## Quick Start
 
-```bash
-# AWS (configured via ~/.aws/credentials or environment)
-export AWS_DEFAULT_REGION=us-east-1
-
-# GitHub (optional - enables private repo access and higher rate limits)
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-```
-
-## Running the Backend
+### 1. Backend
 
 ```bash
 cd backend
-
-# Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+```
 
-# Start the server
+Create `backend/.env`:
+
+```env
+GROQ_API_KEY=gsk_your_groq_key_here
+```
+
+Start the server:
+
+```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Health check: `GET /health`.
+API available at `http://localhost:8000`. Health check: `GET /health`.
 
-## Running the Frontend
+### 2. Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start the dev server
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`. The Vite dev server proxies `/api` requests to the backend at port 8000.
+App available at `http://localhost:5173`. The Vite dev server proxies `/api` to the backend.
 
-## API Endpoints
+## Usage
+
+1. Open `http://localhost:5173`
+2. Enter the GitHub repo URL (e.g., `https://github.com/owner/repo`)
+3. Paste your GitHub token (stored in memory only — cleared on page reload)
+4. Pick a start and end date (max 7 days apart)
+5. Click "Start Investigation"
+
+## API
 
 ### POST /api/investigate
 
-Accepts an investigation request and returns a structured incident report.
-
-**Request Body:**
 ```json
 {
   "repoUrl": "https://github.com/owner/repo",
   "timeRange": {
     "start": "2024-01-15T10:00:00Z",
-    "end": "2024-01-15T12:00:00Z"
+    "end": "2024-01-15T18:00:00Z"
   },
-  "logGroupNames": ["/aws/lambda/my-function"],
-  "metricQueries": [
-    {
-      "metricName": "CPUUtilization",
-      "namespace": "AWS/EC2"
-    }
-  ]
+  "githubToken": "ghp_optional_user_token"
 }
 ```
 
-**Alternative with CloudWatch Alarm:**
-```json
-{
-  "repoUrl": "https://github.com/owner/repo",
-  "alarmArn": "arn:aws:cloudwatch:us-east-1:123456789:alarm:high-cpu"
-}
-```
-
-**Response:** An `IncidentReport` with timeline, suspicious commits, root cause, and rollback suggestions.
+Returns an `IncidentReport` JSON with timeline, suspicious commits, root cause, rollback suggestions, and related issues.
 
 ### GET /health
 
-Returns service health status.
+Returns `{"status": "healthy"}`.
 
 ## Project Structure
 
 ```
 ├── backend/
+│   ├── .env                        # Groq API key + optional GitHub token
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py                 # FastAPI app entry point
-│       ├── models.py               # Pydantic data models
+│       ├── main.py                 # FastAPI app + CORS
+│       ├── config.py               # Settings from .env
+│       ├── models.py               # Pydantic models
 │       ├── routers/
-│       │   └── investigate.py      # /api/investigate endpoint
-│       ├── services/
-│       │   ├── input_validator.py  # Input validation
-│       │   ├── time_window_resolver.py  # Alarm ARN → TimeWindow
-│       │   ├── commit_fetcher.py   # GitHub commit fetching
-│       │   ├── log_fetcher.py      # CloudWatch logs & metrics
-│       │   ├── analysis_engine.py  # Bedrock Claude analysis
-│       │   └── report_generator.py # Report structuring
-│       └── utils/
-│           └── retry.py            # Async retry with backoff
+│       │   └── investigate.py      # POST /api/investigate
+│       └── services/
+│           ├── input_validator.py  # URL + time range validation
+│           ├── commit_fetcher.py   # GitHub commits + diffs
+│           ├── issue_fetcher.py    # GitHub issues
+│           ├── analysis_engine.py  # Groq AI prompt + call
+│           └── report_generator.py # AI response → IncidentReport
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
-│   ├── index.html
 │   └── src/
-│       ├── main.tsx                # React entry point
-│       ├── App.tsx                 # Root component
-│       ├── index.css               # Global styles
-│       ├── api/
-│       │   └── client.ts           # Backend API client
-│       ├── types/
-│       │   └── index.ts            # TypeScript interfaces
+│       ├── App.tsx
+│       ├── index.css
+│       ├── api/client.ts
+│       ├── types/index.ts
 │       ├── components/
 │       │   ├── InvestigationForm.tsx
 │       │   ├── IncidentReport.tsx
 │       │   ├── Timeline.tsx
 │       │   └── ErrorDisplay.tsx
-│       └── pages/
-│           └── Home.tsx
+│       └── pages/Home.tsx
 └── README.md
 ```
 
-## How It Works
+## Security
 
-1. User submits a GitHub repo URL and time range (or CloudWatch alarm ARN)
-2. Backend validates input and resolves the investigation time window
-3. Commits and CloudWatch data are fetched in parallel
-4. Combined data is sent to Amazon Bedrock Claude for analysis
-5. AI response is structured into an incident report with:
-   - Chronological timeline of correlated events
-   - Suspicious commits with confidence scores
-   - Root cause summary
-   - Suggested rollback commands
+- **GitHub tokens** provided via the UI are held in React state only (no localStorage, no cookies). On the backend, they exist in memory only for the duration of the request — never written to disk or logged.
+- The server `.env` file is in `.gitignore`.
+- CORS is restricted to localhost origins.
+
+## Configuration
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GROQ_API_KEY` | Yes | Groq API key for AI analysis |
+| `GROQ_MODEL` | No | Model to use (default: `llama-3.3-70b-versatile`) |
