@@ -1,4 +1,4 @@
-"""FastAPI application entry point for the AI Incident Timeline Correlator."""
+"""FastAPI application entry point for the AI Incident Investigator."""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +7,7 @@ from app.config import settings  # noqa: F401 - ensures .env is loaded at startu
 from app.routers import investigate
 
 app = FastAPI(
-    title="AI Incident Timeline Correlator",
+    title="AI Incident Investigator",
     description="Investigate GitHub commits and issues to identify incident root causes.",
     version="1.0.0",
 )

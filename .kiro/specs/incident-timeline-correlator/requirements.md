@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The AI Incident Timeline Correlator is a web application that helps engineers quickly identify the root cause of production incidents by correlating GitHub commit history and issues with AI-powered reasoning over a given time window. The user provides a GitHub repository URL, a time range (max 7 days), and optionally a GitHub token for private repo access. The tool fetches relevant commits (with code diffs) and issues, feeds them to Groq AI for reasoning, and produces a correlated timeline, suspicious commits, likely root cause analysis, and rollback suggestions.
+The AI Incident Investigator is a web application that helps engineers quickly identify the root cause of production incidents by correlating GitHub commit history and issues with AI-powered reasoning over a given time window. The user provides a GitHub repository URL, a time range (max 7 days), and optionally a GitHub token for private repo access. The tool fetches relevant commits (with code diffs) and issues, feeds them to Groq AI for reasoning, and produces a correlated timeline, suspicious commits, likely root cause analysis, and rollback suggestions.
 
 ## Glossary
 

@@ -1,4 +1,4 @@
-# AI Incident Timeline Correlator
+# AI Incident Investigator
 
 A web application that helps engineers identify root causes of production incidents by correlating GitHub commit history (with code diffs) and issues using AI-powered analysis via Groq.
 

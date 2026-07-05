@@ -1,4 +1,4 @@
-"""Pydantic models for the AI Incident Timeline Correlator."""
+"""Pydantic models for the AI Incident Investigator."""
 
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
