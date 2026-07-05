@@ -46,6 +46,7 @@ Create `backend/.env`:
 
 ```env
 GROQ_API_KEY=gsk_your_groq_key_here
+GROQ_MODEL=selected_model (optional, default is llama-3.3-70b-versatile)
 ```
 
 Start the server:
